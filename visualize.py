@@ -261,7 +261,6 @@ if __name__ == '__main__':
     
     print(z2[-5:, -1, :])
 
-    pdb.set_trace()
     render(z2, 3, t_grid2,rootdrivepath='./figs',
         color='#3658bf',
         movie=True,

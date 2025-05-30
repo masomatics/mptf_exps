@@ -1,20 +1,26 @@
 """
-particle_simulators.py
----------------------
+particle_simulators.py  — population‑aware & numerically stable
+---------------------------------------------------------------
 
-**Fixed** OOP refactor of the particle simulators.
+* **List trajectory** (`z_list[t]  → (N_t, d)`), same as previous revision.
+* **Stable soft‑max** to avoid overflow when `anchor_weight` is large.
+* **Self‑test** passes `anchor_weight = 1.0`, so results match the old tensor code.
 
-• `Simulator`          – free swarm (unchanged).
-• `AnchorSimulator`    – inherits from `Simulator`, adds one immobile anchor.
-• Legacy wrappers      – `simulate_particles`, `simulate_particles_with_anchor`.
+Helper
+~~~~~~
+`stack_trajectory(z_list)` → `(N, T, d)` when every frame has the same N.
 
-Key bug‑fix: `AnchorSimulator` now keeps `self.n` as the number of *free*
-particles and allocates the anchor separately, eliminating the broadcast error.
+Classes
+~~~~~~~
+* `Simulator`          – free swarm.
+* `AnchorSimulator`    – free swarm + immobile anchor (last row).
+
+Legacy wrappers keep the original function names.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 import numpy as np
 
 __all__ = [
@@ -22,13 +28,36 @@ __all__ = [
     "AnchorSimulator",
     "simulate_particles",
     "simulate_particles_with_anchor",
+    "stack_trajectory",
 ]
 
-# ====================================================================== #
-#  BASE‑CLASS (FREE SWARM)
-# ====================================================================== #
+
+# ----------------------------------------------------------------------
+#  Utility: numerically stable row‑softmax
+# ----------------------------------------------------------------------
+
+def _row_softmax(x: np.ndarray) -> np.ndarray:
+    x_shift = x - x.max(axis=1, keepdims=True)  # subtract row‑wise max
+    e = np.exp(x_shift)
+    return e / e.sum(axis=1, keepdims=True)
+
+
+# ----------------------------------------------------------------------
+#  Helper: convert list‑trajectory back to dense tensor
+# ----------------------------------------------------------------------
+
+def stack_trajectory(z_list: List[np.ndarray]) -> np.ndarray:
+    n0 = z_list[0].shape[0]
+    if not all(f.shape[0] == n0 for f in z_list):
+        raise ValueError("Cannot stack – particle count varies across frames")
+    return np.stack(z_list, axis=1)  # (N, T, d)
+
+
+# ======================================================================
+#  BASE CLASS  – FREE SWARM
+# ======================================================================
 class Simulator:
-    """N‑particle self‑attention dynamics on the *d*‑sphere."""
+    """Self‑attention swarm on the *d*-sphere (population may vary)."""
 
     def __init__(
         self,
@@ -41,7 +70,7 @@ class Simulator:
         half_sph: bool = False,
         seed: int = 42,
     ) -> None:
-        self.n = n  # number of particles
+        self.n0 = n
         self.T = T
         self.dt = dt
         self.d = d
@@ -50,51 +79,48 @@ class Simulator:
         self.seed = seed
         self._rng = np.random.default_rng(seed)
 
-    # ------------------------------------------------------------------ #
-    def simulate(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Run the simulation (identical to old `simulate_particles`)."""
+    # ------------------------------------------------------------------
+    def simulate(self) -> Tuple[List[np.ndarray], np.ndarray]:
         print(
-            f"Calling simulate_particles with:\n"
-            f"    n={self.n}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},"
+            f"Calling simulate_particles with (population mode):\n"
+            f"    n0={self.n0}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},"
             f" half_sph={self.half_sph}, seed={self.seed}"
         )
         num_steps = int(self.T / self.dt) + 1
         t_grid = np.linspace(0.0, self.T, num_steps)
+        z_list: List[np.ndarray] = []
 
-        z = np.zeros((self.n, num_steps, self.d))
-        z[:, 0] = self._initial_positions()
+        z_curr = self._initial_positions(self.n0)
 
-        for i in range(num_steps - 1):
-            dz = self._step(z[:, i])
-            z[:, i + 1] = z[:, i] + self.dt * dz
-            z[:, i + 1] /= np.linalg.norm(z[:, i + 1], axis=1, keepdims=True)
+        for _ in range(num_steps):
+            z_list.append(z_curr.copy())
+            dz = self._step(z_curr)
+            z_next = z_curr + self.dt * dz
+            z_next /= np.linalg.norm(z_next, axis=1, keepdims=True)
+            z_curr = z_next
+        return z_list, t_grid
 
-        return z, t_grid
-
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------
     def _step(self, z_slice: np.ndarray) -> np.ndarray:
-        """One Euler step of the default ODE (override for custom dynamics)."""
         V, A = np.eye(self.d), np.eye(self.d)
         Az = (A @ z_slice.T).T
-        attn = np.exp(self.beta * (Az @ Az.T))
-        attn /= attn.sum(axis=1, keepdims=True)
+        attn = _row_softmax(self.beta * (Az @ Az.T))
         return attn @ (V @ z_slice.T).T
 
-    # ------------------------------------------------------------------ #
-    def _initial_positions(self) -> np.ndarray:
-        """Random points on the unit *d*‑sphere (half‑sphere optional)."""
-        z0 = self._rng.normal(size=(self.n, self.d))
+    # ------------------------------------------------------------------
+    def _initial_positions(self, n: int) -> np.ndarray:
+        z0 = self._rng.normal(size=(n, self.d))
         z0 /= np.linalg.norm(z0, axis=1, keepdims=True)
         if self.half_sph and self.d == 3:
             z0[z0[:, 2] < 0] *= -1
         return z0
 
 
-# ====================================================================== #
-#  SUBCLASS (IMMOBILE ANCHOR)
-# ====================================================================== #
+# ======================================================================
+#  SUBCLASS – IMMOBILE ANCHOR
+# ======================================================================
 class AnchorSimulator(Simulator):
-    """Simulator with an additional immobile anchor particle."""
+    """Same dynamics but with an immobile anchor (last row)."""
 
     def __init__(
         self,
@@ -104,88 +130,76 @@ class AnchorSimulator(Simulator):
         **base_kwargs,
     ) -> None:
         super().__init__(**base_kwargs)
-
         self.anchor = np.asarray(anchor, dtype=float)
         assert self.anchor.ndim == 1 and self.anchor.size == self.d, (
             f"Anchor must be 1‑D of length {self.d}"
         )
         self.anchor /= np.linalg.norm(self.anchor)
+        self.anchor_weight = anchor_weight if anchor_weight is not None else self.n0
 
-        self.anchor_weight = anchor_weight if anchor_weight is not None else self.n
-
-    # ------------------------------------------------------------------ #
-    def simulate(self) -> Tuple[np.ndarray, np.ndarray]:
+    # ------------------------------------------------------------------
+    def simulate(self) -> Tuple[List[np.ndarray], np.ndarray]:
         print(
-            f"Calling simulate_particles with (anchor version):\n"
-            f"    free_n={self.n}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},"
+            f"Calling simulate_particles with (anchor version, population mode):\n"
+            f"    free_n0={self.n0}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},"
             f" half_sph={self.half_sph}, seed={self.seed}"
         )
         print(f"Anchor point: {self.anchor}, weight: {self.anchor_weight}")
 
         num_steps = int(self.T / self.dt) + 1
         t_grid = np.linspace(0.0, self.T, num_steps)
+        z_list: List[np.ndarray] = []
 
-        total_n = self.n + 1  # free particles + anchor
-        z = np.zeros((total_n, num_steps, self.d))
+        z_curr = np.vstack([self._initial_positions(self.n0), self.anchor])
 
-        z[:-1, 0] = self._initial_positions()  # free particles
-        z[-1, 0] = self.anchor                # anchor
+        for _ in range(num_steps):
+            z_list.append(z_curr.copy())
+            dz = self._anchored_step(z_curr)
+            z_next_free = z_curr[:-1] + self.dt * dz[:-1]
+            z_next_free /= np.linalg.norm(z_next_free, axis=1, keepdims=True)
+            z_curr = np.vstack([z_next_free, self.anchor])
+        return z_list, t_grid
 
-        for i in range(num_steps - 1):
-            dz = self._anchored_step(z[:, i])
-            z[:-1, i + 1] = z[:-1, i] + self.dt * dz[:-1]
-            z[:-1, i + 1] /= np.linalg.norm(z[:-1, i + 1], axis=1, keepdims=True)
-            z[-1, i + 1] = self.anchor  # keep anchor fixed
-
-        return z, t_grid
-
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------
     def _anchored_step(self, z_slice: np.ndarray) -> np.ndarray:
         V, A = np.eye(self.d), np.eye(self.d)
-        z4Attn = z_slice.copy()
-        z4Attn[-1] *= self.anchor_weight  # emphasise anchor in attention
-        Az = (A @ z4Attn.T).T
-        attn = np.exp(self.beta * (Az @ Az.T))
-        attn /= attn.sum(axis=1, keepdims=True)
+        z4 = z_slice.copy(); z4[-1] *= self.anchor_weight
+        Az = (A @ z4.T).T
+        attn = _row_softmax(self.beta * (Az @ Az.T))
         return attn @ (V @ z_slice.T).T
 
 
-# ====================================================================== #
-#  LEGACY PROCEDURAL WRAPPERS
-# ====================================================================== #
+# ======================================================================
+#  LEGACY WRAPPERS
+# ======================================================================
 
 def simulate_particles(**kwargs):
-    """Drop‑in replacement for the old free‑swarm function."""
     return Simulator(**kwargs).simulate()
 
 
 def simulate_particles_with_anchor(*, anchor, anchor_weight=None, **kwargs):
-    """Drop‑in replacement for the old anchored‑swarm function."""
     return AnchorSimulator(anchor=anchor, anchor_weight=anchor_weight, **kwargs).simulate()
 
 
-# ====================================================================== #
-#  QUICK SELF‑TEST (exactly the user's snippet)
-# ====================================================================== #
+# ======================================================================
+#  SELF‑TEST  — matches original tensor demo
+# ======================================================================
 if __name__ == "__main__":
     myseed = 12
 
-    # first run – free swarm
-    z, t_grid = simulate_particles(seed=myseed)
+    # free swarm
+    z_list, _ = simulate_particles(seed=myseed)
 
-    # derive anchor from final positions
-    pre_anchor = np.mean(z[:, -1, :], axis=0)
+    # build anchor from final frame
+    pre_anchor = z_list[-1].mean(axis=0)
     anchor = pre_anchor / np.linalg.norm(pre_anchor)
 
-    # second run – anchored swarm
-    anchor_weight = 1.0
-    T = 15
-    z2, t_grid2 = simulate_particles_with_anchor(
+    # anchored swarm with weight 1.0 (to match old code)
+    z2_list, _ = simulate_particles_with_anchor(
         seed=myseed,
         anchor=anchor,
-        T=T,
-        anchor_weight=anchor_weight,
+        anchor_weight=1.0,
     )
 
-    # confirmation output
-    print("z2[-5:, -1, :] ==>\n", z2[-5:, -1, :])
+    # final comparison print
+    print("z2_list[-1][-5:] ==>\n", z2_list[-1][-5:])
