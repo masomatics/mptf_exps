@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple, Union
 import numpy as np
+import pdb
 
 __all__ = [
     "Simulator",
@@ -167,6 +168,63 @@ class AnchorSimulator(Simulator):
         Az = (A @ z4.T).T
         attn = _row_softmax(self.beta * (Az @ Az.T))
         return attn @ (V @ z_slice.T).T
+
+
+# ======================================================================
+#  SUBCLASS – continuous interjection of the input point 
+# ======================================================================
+class InterJectorSimulator(Simulator):
+    """
+    Swarm that injects an external time-series C[t] (shape K×d) at every step.
+    `interject_ts` must have shape (num_steps, K, d).
+    """
+
+    def __init__(self, *, interject_ts, ts_weight=None, **base_kwargs):
+        super().__init__(**base_kwargs)
+
+        self.interject_ts = np.asarray(interject_ts, dtype=float)
+        # --- accept (T,d) by auto-expanding to (T,1,d) --------------------
+        if self.interject_ts.ndim == 2:              # (T, d)  →  (T, 1, d)
+            self.interject_ts = self.interject_ts[:, None, :]
+
+        self.ts_weight = ts_weight        
+        assert self.interject_ts.ndim == 3 and self.interject_ts.shape[2] == self.d, (
+            "expected interject_ts with shape (T, K, d)"
+        )
+        self.interject_ts = interject_ts
+
+
+    def simulate(self):
+        num_steps = int(self.T / self.dt) + 1
+        t_grid = np.linspace(0.0, self.T, num_steps)
+
+        z_list = []
+        z_curr = self._initial_positions(self.n0)
+
+        for t in range(num_steps):
+            z_list.append(z_curr.copy())
+
+            # ----- Euler step for the current population -----
+            dz = self._step(z_curr)
+            z_next = z_curr + self.dt * dz
+            z_next /= np.linalg.norm(z_next, axis=1, keepdims=True)
+
+            # ----- append the K fresh particles for step t -----
+            inj = self.interject_ts[t]              # (K, d)
+            if self.ts_weight is not None:          # bias them in attention
+                inj_attn = inj * self.ts_weight
+                # store two copies: one for state, one scaled for attention
+                z_curr = np.concatenate((z_next, inj), axis=0)
+                z_attn = np.concatenate((z_next, inj_attn), axis=0)
+            else:
+                z_curr = np.concatenate((z_next, inj), axis=0)
+                z_attn = z_curr
+
+            # replace for the next iteration
+            z_curr_for_step = z_attn  # used by _step at the next loop
+            z_curr = z_curr          # used by state accumulation
+
+        return z_list, t_grid
 
 
 # ======================================================================
