@@ -4,7 +4,7 @@ from scipy.interpolate import interp1d
 from datetime import datetime
 from tqdm import trange
 import random # for reproducibility
-
+import pdb
 
 # ──────────────────────────────────────────────────────────────────────────
 # DYNAMICS  →  z  (n × num_steps × d)  and the matching time grid
@@ -45,7 +45,7 @@ def simulate_particles(
 # ──────────────────────────────────────────────────────────────────────────
 
 def simulate_particles_with_anchor(n=64, T=15, dt=0.1, d=3, beta=1, half_sph=False, seed=42,
-                                   anchor=None):\
+                                   anchor=None, anchor_weight=None):\
 
 
     #asser anchor is of d dim 
@@ -73,8 +73,10 @@ def simulate_particles_with_anchor(n=64, T=15, dt=0.1, d=3, beta=1, half_sph=Fal
     z0 = np.concatenate((z0, anchor.reshape(1, -1)), axis=0)  # n+1 x d
 
     z[:, 0] = z0    
-
-    anchor_weight = n # Weight for the anchor point in attention calculation
+    if anchor_weight is None:
+        anchor_weight = n  # Default weight for the anchor point in attention calculation
+    else:
+        assert isinstance(anchor_weight, (int, float)), "Anchor weight must be a number"
     print(f"""Anchor point: {anchor}, weight: {anchor_weight}""") 
     #anchor dimension immobile 
     for i in range(num_steps - 1):
