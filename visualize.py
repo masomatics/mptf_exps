@@ -5,6 +5,8 @@ from datetime import datetime
 from tqdm import trange
 import random # for reproducibility
 import simulators as sim 
+import particle_simulators as psim 
+
 import pdb
 
 
@@ -243,8 +245,9 @@ def render(
         print('GIF saved →', gif_path)
 
 if __name__ == '__main__':
-    myseed = 14
-    z, t_grid = sim.simulate_particles(seed=myseed)
+    myseed = 12
+    # z, t_grid = sim.simulate_particles(seed=myseed)
+    z, t_grid = psim.simulate_particles(seed=myseed)
 
 
     pre_anchor = np.mean(z[:, -1, :], axis=0)
@@ -252,7 +255,9 @@ if __name__ == '__main__':
 
     anchor_weight = 1.0
     T= 15
-    z2, t_grid2 = sim.simulate_particles_with_anchor(seed=myseed, anchor=anchor, T=T, anchor_weight=anchor_weight )
+    # z2, t_grid2 = sim.simulate_particles_with_anchor(seed=myseed, anchor=anchor, T=T, anchor_weight=anchor_weight )
+    z2, t_grid2 = psim.simulate_particles_with_anchor(seed=myseed, anchor=anchor, T=T, anchor_weight=anchor_weight )
+
     
     print(z2[-5:, -1, :])
 
