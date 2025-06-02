@@ -118,56 +118,92 @@ class Simulator:
 
 
 # ======================================================================
-#  SUBCLASS – IMMOBILE ANCHOR
+#  SUBCLASS – MULTIPLE IMMOBILE ANCHORS
 # ======================================================================
 class AnchorSimulator(Simulator):
-    """Same dynamics but with an immobile anchor (last row)."""
+    """
+    Swarm with one or more immobile anchors.
+
+    Parameters
+    ----------
+    anchor : (M, d) or (d,) array-like
+        Each row is a unit vector giving an anchor position.
+    anchor_weight : float or (M,) array-like, optional
+        Attention multiplier(s).  Default = `n0` for every anchor.
+    """
 
     def __init__(
         self,
         *,
         anchor: Union[np.ndarray, list, tuple],
-        anchor_weight: Optional[float] = None,
+        anchor_weight: Optional[Union[float, list, np.ndarray]] = None,  # CHANGED
         **base_kwargs,
     ) -> None:
         super().__init__(**base_kwargs)
-        self.anchor = np.asarray(anchor, dtype=float)
-        assert self.anchor.ndim == 1 and self.anchor.size == self.d, (
-            f"Anchor must be 1‑D of length {self.d}"
+
+        # ---------- accept single anchor or stack of anchors ------------
+        anchor = np.asarray(anchor, dtype=float)
+        if anchor.ndim == 1:                       # (d,) → (1,d)
+            anchor = anchor[None, :]
+        assert anchor.ndim == 2 and anchor.shape[1] == self.d, (
+            f"`anchor` must have shape (M, {self.d}) or ({self.d},)"
         )
-        self.anchor /= np.linalg.norm(self.anchor)
-        self.anchor_weight = anchor_weight if anchor_weight is not None else self.n0
+        # normalise every anchor row
+        anchor /= np.linalg.norm(anchor, axis=1, keepdims=True)
+        self.anchors = anchor                      # shape (M, d)
+        self.M = anchor.shape[0]                   # number of anchors
+
+        # ---------- anchor weights --------------------------------------
+        if anchor_weight is None:
+            anchor_weight = self.n0/self.M  # default: n0 per anchor
+        anchor_weight = np.asarray(anchor_weight, dtype=float)
+        if anchor_weight.ndim == 0:                # scalar → (M,)
+            anchor_weight = np.full(self.M, anchor_weight)
+        assert anchor_weight.shape == (self.M,), (
+            "`anchor_weight` must be a scalar or shape (M,)"
+        )
+        self.anchor_weight = anchor_weight
 
     # ------------------------------------------------------------------
     def simulate(self) -> Tuple[List[np.ndarray], np.ndarray]:
         print(
-            f"Calling simulate_particles with (anchor version, population mode):\n"
-            f"    free_n0={self.n0}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},"
-            f" half_sph={self.half_sph}, seed={self.seed}"
+            f"""Calling simulate_particles with (multi-anchor, population mode):
+            free_n0={self.n0}, M={self.M}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},
+            half_sph={self.half_sph}, seed={self.seed}"""
         )
-        print(f"Anchor point: {self.anchor}, weight: {self.anchor_weight}")
+        print(f"""Anchors (rows):\n {self.anchors}\n weights: {self.anchor_weight}""")
 
         num_steps = int(self.T / self.dt) + 1
         t_grid = np.linspace(0.0, self.T, num_steps)
         z_list: List[np.ndarray] = []
 
-        z_curr = np.vstack([self._initial_positions(self.n0), self.anchor])
+        # concatenate initial free particles + anchors
+        z_curr = np.vstack([self._initial_positions(self.n0), self.anchors])
 
         for _ in range(num_steps):
             z_list.append(z_curr.copy())
+
             dz = self._anchored_step(z_curr)
-            z_next_free = z_curr[:-1] + self.dt * dz[:-1]
+            z_next_free = z_curr[:-self.M] + self.dt * dz[:-self.M]
             z_next_free /= np.linalg.norm(z_next_free, axis=1, keepdims=True)
-            z_curr = np.vstack([z_next_free, self.anchor])
+
+            # anchors remain fixed
+            z_curr = np.vstack([z_next_free, self.anchors])
+
         return z_list, t_grid
 
     # ------------------------------------------------------------------
     def _anchored_step(self, z_slice: np.ndarray) -> np.ndarray:
+        """Apply anchor weights only to the last M rows."""
         V, A = np.eye(self.d), np.eye(self.d)
-        z4 = z_slice.copy(); z4[-1] *= self.anchor_weight
+
+        z4 = z_slice.copy()
+        z4[-self.M :] *= self.anchor_weight[:, None]      # NEW
+
         Az = (A @ z4.T).T
         attn = _row_softmax(self.beta * (Az @ Az.T))
         return attn @ (V @ z_slice.T).T
+
 
 
 # ======================================================================

@@ -4,7 +4,7 @@ from scipy.interpolate import interp1d
 from datetime import datetime
 from tqdm import trange
 import random # for reproducibility
-import simulators as sim 
+# import simulators as sim 
 import particle_simulators as psim 
 
 import pdb
