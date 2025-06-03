@@ -86,43 +86,63 @@ import pdb
 #         print('GIF saved →', gif_path)
 
 
-
+# ──────────────────────────────────────────────────────────────────────────
+# RENDER  – flexible visualiser for 2-D / 3-D swarm trajectories
+# ──────────────────────────────────────────────────────────────────────────
 def render(
     z, d, integration_time,
-    *,                              # keyword-only
-    rootdrivepath='/content/drive/MyDrive/figs',
-    color='#3658bf',                # colour for the first m particles
+    *,
+    rootdrivepath='./figs',
+    color='#3658bf',          # colour for the first m particles
+    color_rest='#d94f4f',     # colour for the others
+    m=None,                   # first m indices get `color`
     movie=True,
     fps=10,
-    m=None,                         # first m indices get `color`
-    color_rest='#d94f4f',           # colour for the others
     interpolate=True,
-    title=None
+    title=None,
 ):
-    # ────────────────────────────────────────────────────────────────────
-    # 0) Accept either   list-of-(n_t,d)  or   single array (n,T,d)
-    # ────────────────────────────────────────────────────────────────────
+    """
+    Parameters
+    ----------
+    z : 1) ndarray (N, T, d)  OR
+        2) list  length T, each entry shape (N_t, d)
+    d : 2 or 3
+    integration_time : 1-D array of length T
+    """
+
+    # ------------------------------------------------------------------ #
+    # 0)  normalise input → decide whether we have a *stable* population
+    # ------------------------------------------------------------------ #
     is_list = isinstance(z, list)
+
     if is_list:
-        num_steps = len(z)
-        d         = z[0].shape[1]
-        # global axis limits (one cheap concat)
-        all_xyz   = np.concatenate(z, axis=0)
-        x_min, x_max = all_xyz[:, 0].min(), all_xyz[:, 0].max()
-        if d > 1:
-            y_min, y_max = all_xyz[:, 1].min(), all_xyz[:, 1].max()
-        if d == 3:
-            z_min, z_max = all_xyz[:, 2].min(), all_xyz[:, 2].max()
-        interpolate = False          # identities shaky ⇒ no splines / trails
-    else:
+        same_size = all(frame.shape[0] == z[0].shape[0] for frame in z)
+        if same_size:                            # identities stable → stack
+            z = np.stack(z, axis=1)              # (N, T, d)
+            is_list = False                      # treat as array henceforth
+        else:
+            interpolate = False                  # trajectories would be ambiguous
+
+    if not is_list:                              # array path
         n, num_steps, _ = z.shape
         x_min, x_max = z[:, :, 0].min(), z[:, :, 0].max()
         if d > 1:
             y_min, y_max = z[:, :, 1].min(), z[:, :, 1].max()
         if d == 3:
             z_min, z_max = z[:, :, 2].min(), z[:, :, 2].max()
+    else:                                        # variable-size list path
+        num_steps = len(z)
+        d         = z[0].shape[1]
+        all_xyz   = np.concatenate(z, axis=0)
+        x_min, x_max = all_xyz[:, 0].min(), all_xyz[:, 0].max()
+        if d > 1:
+            y_min, y_max = all_xyz[:, 1].min(), all_xyz[:, 1].max()
+        if d == 3:
+            z_min, z_max = all_xyz[:, 2].min(), all_xyz[:, 2].max()
 
-    # margins
+    # ------------------------------------------------------------------ #
+    # axis padding
+    # ------------------------------------------------------------------ #
     pad = .1 * (x_max - x_min); x_min -= pad; x_max += pad
     if d > 1:
         pad = .1 * (y_max - y_min); y_min -= pad; y_max += pad
@@ -131,118 +151,104 @@ def render(
 
     dt = integration_time[1] - integration_time[0]
 
-    # ────────────────────────────────────────────────────────────────────
-    # A colour palette generator
-    # ────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------ #
+    # colour palette – compute ONCE (array) or per-frame (list)
+    # ------------------------------------------------------------------ #
     def make_colours(n_curr):
-        mm = n_curr if m is None or m > n_curr else m
-        col = np.full(n_curr, color_rest)
-        col[:mm] = color
-        return col
+        mm = n_curr if (m is None or m > n_curr) else m
+        palette = np.full(n_curr, color_rest)
+        palette[:mm] = color
+                
+        return palette
 
-    # ────────────────────────────────────────────────────────────────────
-    # Optional cubic splines (array-mode only)
-    # ────────────────────────────────────────────────────────────────────
+    if not is_list:          # fixed population -> one palette reused
+        colours_static = make_colours(n)
+
+    # ------------------------------------------------------------------ #
+    # cubic splines (only array mode + interpolate flag)
+    # ------------------------------------------------------------------ #
     if not is_list and interpolate:
         interp_x = [interp1d(integration_time, z[i, :, 0], 'cubic') for i in range(n)]
         interp_y = [interp1d(integration_time, z[i, :, 1], 'cubic') for i in range(n)] if d > 1 else None
         interp_z = [interp1d(integration_time, z[i, :, 2], 'cubic') for i in range(n)] if d == 3 else None
 
-    # ────────────────────────────────────────────────────────────────────
-    # File paths exactly like before
-    # ────────────────────────────────────────────────────────────────────
-    now       = datetime.now().strftime('%H-%M-%S') + (f'_{title}' if title else '')
-    dir_path  = os.path.join(rootdrivepath, 'circle' if d == 2 else 'sphere', 'beta=1')
+    # ------------------------------------------------------------------ #
+    # file paths
+    # ------------------------------------------------------------------ #
+    now = datetime.now().strftime('%H-%M-%S') + (f'_{title}' if title else '')
+    dir_path = os.path.join(rootdrivepath, 'circle' if d == 2 else 'sphere')
     os.makedirs(dir_path, exist_ok=True)
-    prefix    = os.path.join(dir_path, now)
-    gif_path  = prefix + '_movie.gif'
+    prefix = os.path.join(dir_path, now)
+    gif_path = prefix + '_movie.gif'
 
-    # ────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------ #
     # MAIN LOOP
-    # ────────────────────────────────────────────────────────────────────
+    # ------------------------------------------------------------------ #
     imgs = []
     for t in trange(num_steps, desc='render'):
-        # --------------------------------------------------------------
-        # Positions & colours this frame
-        # --------------------------------------------------------------
-        if is_list:                         # variable-size case
-            pos_t  = z[t]                   # (n_t, d)
-            xs     = pos_t[:, 0]
-            ys     = pos_t[:, 1] if d > 1 else None
-            zs     = pos_t[:, 2] if d == 3 else None
-            colours = make_colours(len(pos_t))
-        elif interpolate:                   # fixed n with splines
-            xs = [fx(integration_time)[t] for fx in interp_x]
-            ys = [fy(integration_time)[t] for fy in interp_y] if d > 1 else None
-            zs = [fz(integration_time)[t] for fz in interp_z] if d == 3 else None
-            colours = make_colours(len(xs))
-        else:                               # fixed n, no splines
-            xs = z[:, t, 0]
-            ys = z[:, t, 1] if d > 1 else None
-            zs = z[:, t, 2] if d == 3 else None
-            colours = make_colours(len(xs))
+        # ----- positions for this frame --------------------------------
+        if not is_list:
+            if interpolate:
+                xs = [fx(integration_time)[t] for fx in interp_x]
+                ys = [fy(integration_time)[t] for fy in interp_y] if d > 1 else None
+                zs = [fz(integration_time)[t] for fz in interp_z] if d == 3 else None
+            else:
+                xs = z[:, t, 0]
+                ys = z[:, t, 1] if d > 1 else None
+                zs = z[:, t, 2] if d == 3 else None
+            colours = colours_static
+        else:                       # variable population
+            frame = z[t]            # (N_t, d)
+            xs, ys, zs = frame[:, 0], None, None
+            if d > 1: ys = frame[:, 1]
+            if d == 3: zs = frame[:, 2]
+            colours = make_colours(len(frame))
 
-
-        # --------------------------------------------------------------
-        # 2-D plot
-        # --------------------------------------------------------------
+        # ----- plotting -------------------------------------------------
         if d == 2:
             fig, ax = plt.subplots(figsize=(5, 5))
             ax.axis('off'); ax.set_aspect('equal')
             ax.set(xlim=(x_min, x_max), ylim=(y_min, y_max))
             ax.set_title(f'$t={t*dt:.2f}$')
-
             ax.scatter(xs, ys, s=30, c=colours, edgecolors='black')
 
-            if t and (not is_list):        # trails only when n is fixed
-                for i in range(len(xs)):
-                    ax.plot(
-                        (interp_x[i](integration_time) if interpolate else z[i, :, 0])[:t + 1],
-                        (interp_y[i](integration_time) if interpolate else z[i, :, 1])[:t + 1],
-                        c=colours[i], lw=.4, ls='dashed'
-                    )
+            if t and (not is_list) and interpolate:
+                for i in range(n):
+                    ax.plot(interp_x[i](integration_time)[:t+1],
+                            interp_y[i](integration_time)[:t+1],
+                            c=colours[i], lw=.4, ls='dashed')
 
-        # --------------------------------------------------------------
-        # 3-D plot
-        # --------------------------------------------------------------
-        else:
+        else:  # d == 3
             fig = plt.figure()
-            ax  = fig.add_subplot(111, projection='3d')
+            ax = fig.add_subplot(111, projection='3d')
             ax.axis('off')
             ax.set(xlim=(x_min, x_max), ylim=(y_min, y_max), zlim=(z_min, z_max))
             ax.set_title(f'$t={t*dt:.2f}$')
-
             ax.scatter(xs, ys, zs, s=25, c=colours, edgecolors='black')
 
-            if t and (not is_list):
-                for i in range(len(xs)):
+            if t and (not is_list) and interpolate:
+                for i in range(n):
                     ax.plot(
-                        (interp_x[i](integration_time) if interpolate else z[i, :, 0])[:t + 1],
-                        (interp_y[i](integration_time) if interpolate else z[i, :, 1])[:t + 1],
-                        (interp_z[i](integration_time) if interpolate else z[i, :, 2])[:t + 1],
+                        interp_x[i](integration_time)[:t+1],
+                        interp_y[i](integration_time)[:t+1],
+                        interp_z[i](integration_time)[:t+1],
                         c=colours[i], lw=.4, ls='dashed'
                     )
-
             ax.view_init(elev=10, azim=30 + 30 * (t / num_steps - .5))
 
-        # --------------------------------------------------------------
-        # Save this frame, delete PNG, collect for GIF
-        # --------------------------------------------------------------
+        # ----- save frame ----------------------------------------------
         png_path = f'{prefix}_{t}.png'
         plt.savefig(png_path, dpi=300, bbox_inches='tight')
         plt.close()
-
         if movie:
             imgs.append(imageio.imread(png_path))
-
         os.remove(png_path)
 
-    # ────────────────────────────────────────────────────────────────────
-    # GIF assembly (unchanged)
-    # ────────────────────────────────────────────────────────────────────
+    # ----- assemble GIF ------------------------------------------------
     if movie:
         imageio.mimsave(gif_path, imgs, fps=fps)
         print('GIF saved →', gif_path)
+
 
 if __name__ == '__main__':
     myseed = 12

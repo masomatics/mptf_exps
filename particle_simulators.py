@@ -20,7 +20,7 @@ Legacy wrappers keep the original function names.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Callable
 import numpy as np
 import pdb
 
@@ -149,6 +149,9 @@ class AnchorSimulator(Simulator):
             f"`anchor` must have shape (M, {self.d}) or ({self.d},)"
         )
         # normalise every anchor row
+        if any(np.linalg.norm(anchor, axis=1, keepdims=True) ==0):
+            print("Warning: not using valid anchors when Immobile")
+
         anchor /= np.linalg.norm(anchor, axis=1, keepdims=True)
         self.anchors = anchor                      # shape (M, d)
         self.M = anchor.shape[0]                   # number of anchors
@@ -165,13 +168,14 @@ class AnchorSimulator(Simulator):
         self.anchor_weight = anchor_weight
 
     # ------------------------------------------------------------------
-    def simulate(self) -> Tuple[List[np.ndarray], np.ndarray]:
-        print(
-            f"""Calling simulate_particles with (multi-anchor, population mode):
-            free_n0={self.n0}, M={self.M}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},
-            half_sph={self.half_sph}, seed={self.seed}"""
-        )
-        print(f"""Anchors (rows):\n {self.anchors}\n weights: {self.anchor_weight}""")
+    def simulate(self, verbose=True) -> Tuple[List[np.ndarray], np.ndarray]:
+        if verbose:
+            print(
+                f"""Calling simulate_particles with (multi-anchor, population mode):
+                free_n0={self.n0}, M={self.M}, T={self.T}, dt={self.dt}, d={self.d}, beta={self.beta},
+                half_sph={self.half_sph}, seed={self.seed}"""
+            )
+            print(f"""Anchors (rows):\n {self.anchors}\n weights: {self.anchor_weight}""")
 
         num_steps = int(self.T / self.dt) + 1
         t_grid = np.linspace(0.0, self.T, num_steps)
@@ -205,60 +209,164 @@ class AnchorSimulator(Simulator):
         return attn @ (V @ z_slice.T).T
 
 
-
 # ======================================================================
-#  SUBCLASS – continuous interjection of the input point 
+#  SUBCLASS – MOBILE ANCHORS (POPULATION CONSTANT)
 # ======================================================================
-class InterJectorSimulator(Simulator):
-    """
-    Swarm that injects an external time-series C[t] (shape K×d) at every step.
-    `interject_ts` must have shape (num_steps, K, d).
-    """
+class MobileAnchorSimulator(AnchorSimulator):
+    """Anchors follow a provided time‑series or ODE; population stays fixed."""
 
-    def __init__(self, *, interject_ts, ts_weight=None, **base_kwargs):
-        super().__init__(**base_kwargs)
+    def __init__(
+        self,
+        *,
+        anchor_time_series: Optional[np.ndarray] = None,       # (T,M,d)
+        anchor_ode: Optional[Callable[[float, np.ndarray], np.ndarray]] = None,
+        anchor_weight: Optional[Union[float, list, np.ndarray]] = None,
+        **base_kwargs,
+    ) -> None:
 
-        self.interject_ts = np.asarray(interject_ts, dtype=float)
-        # --- accept (T,d) by auto-expanding to (T,1,d) --------------------
-        if self.interject_ts.ndim == 2:              # (T, d)  →  (T, 1, d)
-            self.interject_ts = self.interject_ts[:, None, :]
+        if (anchor_time_series is None) == (anchor_ode is None):
+            raise ValueError("Provide exactly one of anchor_time_series or anchor_ode.")
 
-        self.ts_weight = ts_weight        
-        assert self.interject_ts.ndim == 3 and self.interject_ts.shape[2] == self.d, (
-            "expected interject_ts with shape (T, K, d)"
-        )
-        self.interject_ts = interject_ts
+        if anchor_time_series is not None:
+            ts = np.asarray(anchor_time_series, dtype=float)
+            assert ts.ndim == 3, "anchor_time_series must be (T,M,d)"
+            anchor_init = ts[0]
+            self._anchor_ts = ts
+            self._use_ts = True
+        else:
+            anchor_init = np.zeros((1, base_kwargs.get('d', 3)))  # placeholder
+            self._anchor_ode = anchor_ode
+            self._use_ts = False
 
+        super().__init__(anchor=anchor_init, anchor_weight=anchor_weight, **base_kwargs)
 
-    def simulate(self):
+    # ------------------------------------------------------------------
+    def simulate(self) -> Tuple[List[np.ndarray], np.ndarray]:
         num_steps = int(self.T / self.dt) + 1
         t_grid = np.linspace(0.0, self.T, num_steps)
+        z_list: List[np.ndarray] = []
 
-        z_list = []
-        z_curr = self._initial_positions(self.n0)
+        free  = self._initial_positions(self.n0)   # (n0,d)
+        anc   = self.anchors.copy()                # (M,d)
+        state = np.vstack([free, anc])
 
-        for t in range(num_steps):
-            z_list.append(z_curr.copy())
+        for step in range(num_steps):
+            z_list.append(state.copy())
 
-            # ----- Euler step for the current population -----
-            dz = self._step(z_curr)
-            z_next = z_curr + self.dt * dz
-            z_next /= np.linalg.norm(z_next, axis=1, keepdims=True)
+            # ------ free particles step --------------------------------
+            attn = state.copy(); attn[-self.M:] *= self.anchor_weight[:, None]
+            dz = self._step(attn)
+            free_next = state[:-self.M] + self.dt * dz[:-self.M]
+            free_next /= np.linalg.norm(free_next, axis=1, keepdims=True)
 
-            # ----- append the K fresh particles for step t -----
-            inj = self.interject_ts[t]              # (K, d)
-            if self.ts_weight is not None:          # bias them in attention
-                inj_attn = inj * self.ts_weight
-                # store two copies: one for state, one scaled for attention
-                z_curr = np.concatenate((z_next, inj), axis=0)
-                z_attn = np.concatenate((z_next, inj_attn), axis=0)
+            # ------ anchor update --------------------------------------
+            if self._use_ts:
+                anc_next = self._anchor_ts[step]
             else:
-                z_curr = np.concatenate((z_next, inj), axis=0)
-                z_attn = z_curr
+                anc_next = self._anchor_ode(t_grid[step], state[-self.M:])
+            anc_next /= np.linalg.norm(anc_next, axis=1, keepdims=True)
 
-            # replace for the next iteration
-            z_curr_for_step = z_attn  # used by _step at the next loop
-            z_curr = z_curr          # used by state accumulation
+            state = np.vstack([free_next, anc_next])
+
+        return z_list, t_grid
+
+
+
+# ======================================================================
+#  SUBCLASS – INTERJECTOR (growing, weighted anchor history)
+# ======================================================================
+class InterJectorSimulator(Simulator):
+    """Free block (size *n0*) interacts with a growing FIFO history of K‑sized
+    anchor slices provided by `anchor_time_series`.
+
+    Parameters
+    ----------
+    anchor_time_series : ndarray, shape (T, K, d)
+        Slice *t* (0‑based) is appended at the **end of step t**.
+    anchor_weight : float or (T,) ndarray, optional
+        • scalar → same mass for every slice  
+        • vector  → mass[t] applied to slice `anchor_time_series[t]`.
+    max_history : int or None
+        Maximum number of anchor slices to retain.  If reached, the oldest
+        slice is dropped FIFO.  Default = None (grow unbounded).
+    """
+
+    def __init__(
+        self,
+        *,
+        anchor_time_series: np.ndarray,      # (T,K,d)
+        anchor_weight: Union[float, np.ndarray] = 1.0,
+        max_history: Optional[int] = None,
+        **base_kwargs,
+    ) -> None:
+        super().__init__(**base_kwargs)
+
+        ts = np.asarray(anchor_time_series, dtype=float)
+        if ts.ndim != 3 or ts.shape[2] != self.d:
+            raise ValueError("anchor_time_series must have shape (T, K, d)")
+        self._ts = ts                      # (T,K,d)
+        self.K = ts.shape[1]
+        self.max_history = max_history
+
+        w = np.asarray(anchor_weight, dtype=float)
+        if w.ndim == 0:
+            w = np.full(ts.shape[0], w)    # broadcast scalar → (T,)
+        if w.shape != (ts.shape[0],):
+            raise ValueError("anchor_weight must be scalar or shape (T,)")
+        self._w = w
+
+    # ------------------------------------------------------------------
+    def simulate(self) -> Tuple[List[np.ndarray], np.ndarray]:
+        T_steps = self._ts.shape[0]
+        if T_steps != int(self.T / self.dt) + 1:
+            raise ValueError("anchor_time_series length must equal num time steps")
+
+        t_grid = np.linspace(0.0, self.T, T_steps)
+        z_list: List[np.ndarray] = []
+
+        free = self._initial_positions(self.n0)            # (n0,d)
+        anchors: List[np.ndarray] = []                     # list of (K,d)
+        masses:  List[float] = []                          # parallel list
+
+        # ---------- record initial frame (free only) -------------------
+        z_list.append(free.copy())
+
+        # iterate over steps 0 .. T_steps-2  (since slice t+1 appended)
+        for t in range(T_steps - 1):
+            # ─── build state & weighted copy for attention ────────────
+            state = np.vstack([free] + anchors)            # (M + p·K, d)
+            weighted = state.copy()
+            if masses:
+                start = self.n0
+                for mass, block in zip(masses, anchors):
+                    weighted[start:start+self.K] *= mass
+                    start += self.K
+
+            # ─── Euler step -------------------------------------------
+            dz = self._step(weighted)
+            free += self.dt * dz[:self.n0]
+            free /= np.linalg.norm(free, axis=1, keepdims=True)
+
+            # update existing anchors in‑place
+            off = self.n0
+            for i in range(len(anchors)):
+                anchors[i] += self.dt * dz[off:off+self.K]
+                anchors[i] /= np.linalg.norm(anchors[i], axis=1, keepdims=True)
+                off += self.K
+
+            # ─── append new slice (unit norm) --------------------------
+            new_anchor = self._ts[t+1].copy()
+            new_anchor /= np.linalg.norm(new_anchor, axis=1, keepdims=True)
+            anchors.append(new_anchor)
+            masses.append(self._w[t+1])
+
+            # FIFO cap
+            if self.max_history is not None and len(anchors) > self.max_history:
+                anchors.pop(0)
+                masses.pop(0)
+
+            # record frame after append
+            z_list.append(np.vstack([free] + anchors))
 
         return z_list, t_grid
 
@@ -271,8 +379,8 @@ def simulate_particles(**kwargs):
     return Simulator(**kwargs).simulate()
 
 
-def simulate_particles_with_anchor(*, anchor, anchor_weight=None, **kwargs):
-    return AnchorSimulator(anchor=anchor, anchor_weight=anchor_weight, **kwargs).simulate()
+def simulate_particles_with_anchor(*, anchor, anchor_weight=None, verbose=True, **kwargs):
+    return AnchorSimulator(anchor=anchor, anchor_weight=anchor_weight, **kwargs).simulate(verbose=verbose)
 
 
 # ======================================================================
