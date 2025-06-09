@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
 
     keys = ['anchor', 'mobile', 'interjector']
-    playmode = keys[2] 
+    playmode = keys[1] 
 
 
 
@@ -132,9 +132,9 @@ if __name__ == "__main__":
         z_list, t_grid = a_sim.simulate()
 
 
-        vis.render(z_list, 3,  t_grid, m=64, rootdrivepath='./figs', movie=True, fps=10,  title=f"mobile_anchors_weight{weight}_beta{beta}", interpolate=True) 
+        vis.render(z_list, 3,  t_grid, m=64, rootdrivepath='./figs', movie=True, fps=10,  title=f"immobile_anchors_weight{weight}_beta{beta}", interpolate=True) 
 
-    elif playmode == 'modile':
+    elif playmode == 'mobile':
         '''
         Mobile Anchor Simulation Example
         '''
@@ -186,7 +186,7 @@ if __name__ == "__main__":
         dt = 0.5
         theta_dot = 0.1       # rad / unit-time
         eta_dot   = 0.25
-        beta = 1.0
+        beta = 5.0
         fps = 8
         weight = 1.0
 
@@ -213,7 +213,7 @@ if __name__ == "__main__":
         z_list, t_grid = i_sim.simulate()
 
         vis.render(z_list, 3, t_grid, m=64, rootdrivepath='./figs',
-            movie=True, fps=fps, title='mobile_anchors', interpolate=True)
+            movie=True, fps=fps, title=f"interjector_anchors_weight{weight}_beta{beta}", interpolate=True)
 
 
     else:
