@@ -181,12 +181,16 @@ if __name__ == "__main__":
         anchor2 = np.array([0.0, 1.0, 0.0])
         anchors = np.vstack((anchor1, anchor2))
 
-        T = 30
+        T = 80
 
-        dt = 1.0
+        dt = 0.5
         theta_dot = 0.1       # rad / unit-time
         eta_dot   = 0.25
-        beta = 5.0
+        beta = 1.0
+        fps = 8
+        weight = 1.0
+
+
         traj, t = constant_speed_sphere_path(
             anchors,
             theta_dot=theta_dot,
@@ -202,15 +206,14 @@ if __name__ == "__main__":
 
         anchor_traj = traj.squeeze(2)
         myseed= 10
-        weight = 1.0
 
         i_sim = ps.InterJectorSimulator(anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=dt)
 
 
         z_list, t_grid = i_sim.simulate()
 
-
-        pdb.set_trace()
+        vis.render(z_list, 3, t_grid, m=64, rootdrivepath='./figs',
+            movie=True, fps=fps, title='mobile_anchors', interpolate=True)
 
 
     else:
