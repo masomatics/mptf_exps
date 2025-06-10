@@ -77,6 +77,7 @@ class Simulator:
         # RNG
         self._gen = torch.Generator(device=self.device)
         self._gen.manual_seed(seed)
+        torch.manual_seed(seed)
 
     # ------------------------------------------------------------------
     def simulate(self) -> Tuple[List[torch.Tensor], torch.Tensor]:
@@ -345,13 +346,109 @@ class InterJectorSimulator(Simulator):
         return z_list, t_grid
 
 
-# ======================================================================
-#  Helper function(s)
-# ======================================================================
+
+# ---------- utility ------------------------------------------------
+
+def _row_softmax(x: torch.Tensor) -> torch.Tensor:
+    """Row‑wise numerically stable soft‑max."""
+    x_shift = x - x.max(dim=1, keepdim=True).values
+    e = torch.exp(x_shift)
+    return e / e.sum(dim=1, keepdim=True)
+
 
 def _normalize_rows(x: torch.Tensor) -> torch.Tensor:
-    return x / torch.linalg.norm(x, dim=1, keepdim=True)
+    """Project rows to the sphere S^{d‑1}."""
+    return x / torch.linalg.norm(x, dim=-1, keepdim=True)
 
+# ──────────────────────────────────────────────────────────────────
+#  Kuramoto‑type simulators  (depend on MobileAnchorSimulator)
+# ──────────────────────────────────────────────────────────────────
+
+class KuramotoSelfAttnSimulator(MobileAnchorSimulator):
+    """Kuramoto ODE with self‑attention connectivity (per‑particle Ω)."""
+
+    # ------------------------------------------------------------
+    def __init__(self, *, beta: float = 1.0, init_omg: float = 0.1, use_omega: bool = True, speed_variance = 20.0, **base_kwargs):
+        super().__init__(**base_kwargs)
+        self.beta = beta
+        self.use_omega = use_omega
+        d, n0 = self.d, self.n0
+        scale = init_omg / (d ** 0.5)
+        speed_variance = speed_variance / (d ** 0.5)  # scale variance by d
+        if use_omega:
+            self.omg_param = torch.nn.Parameter(scale * torch.randn(n0, d, d, dtype=self.dtype, device=self.device)) * speed_variance
+            print(self.omg_param[0])
+        else:
+            self.register_buffer("omg_param", torch.zeros(n0, d, d, dtype=self.dtype, device=self.device))
+
+    # ------------------------------------------------------------
+    def Jxz(self, state: torch.Tensor) -> torch.Tensor:
+        """Self‑attention connectivity for free particles only."""
+        N0 = self.n0
+        free = state[:N0]
+        attn = _row_softmax(self.beta * (state @ state.T))
+        return attn[:N0, :N0] @ free                  # (N₀,d)
+
+    # ------------------------------------------------------------
+    def _step(self, state: torch.Tensor) -> torch.Tensor:
+        N0 = self.n0
+        free    = state[:N0]
+        anchors = state[N0:]
+
+        Jfree = self.Jxz(state)                       # (N₀,d)
+        proj  = Jfree - (Jfree * free).sum(dim=1, keepdim=True) * free
+
+        if self.use_omega:
+            omega = self._antisymmetrize_batch(self.omg_param)
+            omega_x = torch.einsum('ijd,id->ij', omega, free)
+        else:
+            omega_x = torch.zeros_like(free)
+
+        dxdt_free   = omega_x + proj
+        dxdt_anchor = torch.zeros_like(anchors)       # anchors follow trajectory elsewhere
+        return torch.cat([dxdt_free, dxdt_anchor], dim=0)
+
+    # ------------------------------------------------------------
+    def compute_energy(self, state: torch.Tensor) -> torch.Tensor:
+        N0 = self.n0
+        free = state[:N0]
+        Jfree = self.Jxz(state)
+        return -(free * Jfree).sum(dim=1)             # (N₀,)
+
+    @staticmethod
+    def _antisymmetrize_batch(p: torch.Tensor) -> torch.Tensor:
+        return p - p.transpose(-1, -2)
+
+# ──────────────────────────────────────────────────────────────────
+#  Fixed‑matrix J variant
+# ──────────────────────────────────────────────────────────────────
+class KuramotoJSimulator(KuramotoSelfAttnSimulator):
+    """Kuramoto variant with fixed coupling matrix J (free⇄free) + anchor shift.
+    Inherits _step & compute_energy from parent; only Jxz is specialised.
+    """
+
+    def __init__(self, *, fixed_J: Optional[torch.Tensor] = None, **kwargs):
+        super().__init__(**kwargs)
+        if fixed_J is None:
+            fixed_J = torch.randn(self.n0, self.n0, dtype=self.dtype, device=self.device) 
+        elif fixed_J.shape != (self.n0, self.n0):
+            raise ValueError("fixed_J must be (N₀,N₀)")
+        self.J = torch.nn.Parameter(fixed_J).to(self.device, self.dtype)
+
+    # ------------------------------------------------------------
+    def Jxz(self, state: torch.Tensor) -> torch.Tensor:
+        N0 = self.n0
+        free    = state[:N0]
+        anchors = state[N0:]
+
+        if torch.isnan(anchors).any(): 
+            return self.J @ free # no anchors, just free particles
+        else:
+            return self.J @ free + anchors.mean(0, keepdim=True)
+    
+
+
+# ----------------------------------------------------------------------
 
 # ======================================================================
 #  LEGACY WRAPPERS

@@ -116,20 +116,25 @@ def render(
         raise ValueError("For a growing list you must provide `m`.")
 
     if is_list and all(f.shape[0] == z[0].shape[0] for f in z):
+        z = [z[k].detach().cpu().numpy() for k in range(len(z))]
         z = np.stack(z, axis=1)
         is_list = False
 
     if not is_list:
         n, num_steps, _ = z.shape
-        x_min, x_max = z[:, :, 0].min(), z[:, :, 0].max()
-        if d > 1: y_min, y_max = z[:, :, 1].min(), z[:, :, 1].max()
-        if d == 3: z_min, z_max = z[:, :, 2].min(), z[:, :, 2].max()
+        # x_min, x_max = z[:, :, 0].min(), z[:, :, 0].max()
+        # if d > 1: y_min, y_max = z[:, :, 1].min(), z[:, :, 1].max()
+        # if d == 3: z_min, z_max = z[:, :, 2].min(), z[:, :, 2].max()
     else:
         num_steps = len(z)
-        all_xyz   = np.concatenate(z, axis=0)
-        x_min, x_max = all_xyz[:, 0].min(), all_xyz[:, 0].max()
-        if d > 1: y_min, y_max = all_xyz[:, 1].min(), all_xyz[:, 1].max()
-        if d == 3: z_min, z_max = all_xyz[:, 2].min(), all_xyz[:, 2].max()
+        # all_xyz   = np.concatenate(z, axis=0)
+    x_min, x_max = -1.2, 1.2
+    y_min, y_max = -1.2, 1.2
+    z_min, z_max = -1.2, 1.2
+
+        # x_min, x_max = all_xyz[:, 0].min(), all_xyz[:, 0].max()
+        # if d > 1: y_min, y_max = all_xyz[:, 1].min(), all_xyz[:, 1].max()
+        # if d == 3: z_min, z_max = all_xyz[:, 2].min(), all_xyz[:, 2].max()
 
     pad = .1 * (x_max - x_min); x_min -= pad; x_max += pad
     if d > 1:
