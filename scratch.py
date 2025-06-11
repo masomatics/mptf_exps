@@ -134,8 +134,8 @@ def constant_speed_sphere_path(
 if __name__ == "__main__":
 
 
-    keys = ['immobile', 'mobile', 'interjector', 'kuramotoAttn', 'kuramotoJ', 'kuramotoAttn2d', 'kuramotoJ2dClassic', 'kuramotoJ2d']
-    playmode = keys[-1] 
+    keys = ['immobile', 'mobile', 'mobile2d', 'interjector', 'kuramotoAttn', 'kuramotoJ', 'kuramotoAttn2d', 'kuramotoJ2dClassic', 'kuramotoJ2d']
+    playmode = 'kuramotoJ2d'
 
     print(f"""Running simulation for playmode: {playmode}""")
 
@@ -173,8 +173,8 @@ if __name__ == "__main__":
         anchor2 = np.array([0.0, 1.0, 0.0])
         anchors = np.vstack((anchor1, anchor2))
 
-        T = 150
-
+        T = 50
+        dt = 0.1
 
         theta_dot = 0.1       # rad / unit-time
         eta_dot   = 0.25
@@ -184,7 +184,7 @@ if __name__ == "__main__":
             theta_dot=theta_dot,
             eta_dot=eta_dot,
             T=T,
-            dt=0.1,
+            dt=dt,
         )
 
         print("trajectory shape:", traj.shape)   # (num_steps, 2, 3)
@@ -198,12 +198,55 @@ if __name__ == "__main__":
         weight = 1.0
 
 
-        m_sim = ps.MobileAnchorSimulator(anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=0.5)
+        m_sim = ps.MobileAnchorSimulator(anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=dt)
 
         z_list, t_grid = m_sim.simulate()
 
 
         vis.render(z_list, 3,  t_grid, m=64, rootdrivepath='./figs', movie=True, fps=10,  title=f"mobile_anchors_weight{weight}_beta{beta}", interpolate=True) 
+
+    elif playmode == 'mobile2d':
+            '''
+            Mobile Anchor Simulation Example
+            '''
+            anchor1 = np.array([1.0, 0.0, 0.0])
+            anchor2 = np.array([0.0, 1.0, 0.0])
+            anchors = np.vstack((anchor1, anchor2))
+
+            T = 50
+            dt = 0.1
+
+            d=2 
+
+            theta_dot = 0.1       # rad / unit-time
+            eta_dot   = 0.25
+            beta = 5.0
+            traj, t = constant_speed_sphere_path(
+                anchors,
+                theta_dot=theta_dot,
+                eta_dot=eta_dot,
+                T=T,
+                dt=dt,
+            )
+
+            print("trajectory shape:", traj.shape)   # (num_steps, 2, 3)
+            print("first frame:", traj[0])
+            print("last  frame:", traj[-1])
+
+
+            anchor_traj = traj.squeeze(2)[:, :, :d]
+
+
+            myseed= 10
+            weight = 1.0
+
+
+            m_sim = ps.MobileAnchorSimulator(anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=dt, d=d)
+
+            z_list, t_grid = m_sim.simulate()
+
+
+            vis.render(z_list, d,  t_grid, m=64, rootdrivepath='./figs', movie=True, fps=10,  title=f"mobile_anchors_weight{weight}_beta{beta}", interpolate=True) 
 
 
 
@@ -253,13 +296,14 @@ if __name__ == "__main__":
         '''
 
         anchor1 = np.array([1.0, 0.0, 0.0])
-        anchor2 = np.array([0.0, 1.0, 0.0])
-        anchors = np.vstack((anchor1, anchor2))
+        # anchor2 = np.array([0.0, 1.0, 0.0])
+        anchors = np.vstack((anchor1, ))
+        # anchors = np.vstack((anchor1, anchor2))
 
         T = 150
 
         dt = 0.5
-        theta_dot = 0       # rad / unit-time
+        theta_dot = 0.2       # rad / unit-time
         eta_dot   = 0.25
         beta = 5.0
         traj, t = constant_speed_sphere_path(
@@ -343,15 +387,19 @@ if __name__ == "__main__":
 
         d = 2
         anchor1 = np.array([1.0, 0.0, 0.0])
-        anchor2 = np.array([0.0, 1.0, 0.0])
-        anchors = np.vstack((anchor1, anchor2))
+        # anchor2 = np.array([0.0, 1.0, 0.0])
+        anchors = np.vstack((anchor1, ))
 
-        T = 50
-        N0 = 20
+        T = 20
+        N0 = 10
 
         dt = 0.1
 
-        angular_speed = 0     # rad / unit-time
+        #speed variance of the free particles 
+        speed_variance = 5.
+
+        #angular speed of the anchors 
+        angular_speed = 0.2     # rad / unit-time
         theta_dot = angular_speed      # rad / unit-time
         eta_dot   = angular_speed
         beta = 5.0
@@ -372,7 +420,8 @@ if __name__ == "__main__":
         print("first frame:", traj[0])
         print("last  frame:", traj[-1])
 
-        k_sim = ps.KuramotoSelfAttnSimulator(anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=dt, n=N0, d=2)
+        k_sim = ps.KuramotoSelfAttnSimulator(anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=dt, n=N0, d=2,
+                                             speed_variance=speed_variance, seed=myseed)
 
         print(f"""Simulation for {playmode}_anchors_weight{weight}_beta{beta} complete """) 
 
@@ -392,8 +441,8 @@ if __name__ == "__main__":
         plt.savefig(figpath, dpi=150)
         plt.show()
 
-        #vis.render(z_list, d, t_grid, m=N0, rootdrivepath='./figs',
-        #    movie=True, fps=fps, title=f"{playmode}_anchors_weight{weight}_N0{N0}_beta{beta}_ancspeed{angular_speed}_seed{myseed}", interpolate=True,)        
+        vis.render(z_list, d, t_grid, m=N0, rootdrivepath='./figs',
+            movie=True, fps=fps, title=f"{playmode}_anchors_weight{weight}_N0{N0}_beta{beta}_ancspeed{angular_speed}_seed{myseed}", interpolate=True,)        
 
 
     elif playmode == 'kuramotoJ2dClassic':
@@ -494,6 +543,7 @@ if __name__ == "__main__":
         myseed= 42
         weight = 5.0 
         fps = 8
+        speed_variance = 0
 
 
         anchor_traj = traj.squeeze(2)[:, :, :d]
@@ -510,7 +560,7 @@ if __name__ == "__main__":
 
 
         k_sim = ps.KuramotoJSimulator(fixed_J=fixed_J, anchor_weight=weight, anchor_time_series=anchor_traj, T=T, beta=beta, dt=dt, n=N0, d=2, 
-                                      seed=myseed)
+                                      seed=myseed, speed_variance=speed_variance)
 
         print(f"""Simulation for {playmode}_anchors_weight{weight}_beta{beta} complete """) 
 
@@ -526,12 +576,13 @@ if __name__ == "__main__":
 
         # --- save & show ------------------------------------
         plt.tight_layout()
-        figpath = os.path.join('./figs', f"energy_vs_time_{playmode}_anchors_weight{weight}_N0{N0}_beta{beta}_ancspeed{angular_speed}_seed{myseed}.png")
+        figpath = os.path.join('./figs', f"energy_vs_time_{playmode}_anchors_weight{weight}_N0{N0}_beta{beta}_ancspeed{angular_speed}_seed{myseed}_speedvariance{speed_variance}.png")
         plt.savefig(figpath, dpi=150)
+        print(f"Figure saved to {figpath}")
         # plt.show()
 
         vis.render(z_list, d, t_grid, m=N0, rootdrivepath='./figs',
-            movie=True, fps=fps, title=f"{playmode}_anchors_weight{weight}_N0{N0}_beta{beta}_ancspeed{angular_speed}_seed{myseed}", interpolate=True,)              
+            movie=True, fps=fps, title=f"{playmode}_anchors_weight{weight}_N0{N0}_beta{beta}_ancspeed{angular_speed}_seed{myseed}_speedvariance{speed_variance}", interpolate=True,)              
 
     else:
         raise NotImplementedError(f"Unknown playmode: {playmode}.")
