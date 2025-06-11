@@ -403,8 +403,13 @@ class KuramotoSelfAttnSimulator(MobileAnchorSimulator):
         anchors = state[N0:]
 
         Jfree = self.Jxz(state)                       # (N₀,d)
+        proj = Jfree 
+
+        # Got rid of this projection because it is contained in the Simulator class.
+        # Also, by definition, Omega^T = -Omega, so  z^T Omega z = 0, 
+        # so  Proj (Omega z + Proj Jfree) = Omega z + Proj Jfree
         # proj  = Jfree - (Jfree * free).sum(dim=1, keepdim=True) * free
-        proj = self.project_to_tangent_space(Jfree, free)
+        # proj = self.project_to_tangent_space(Jfree, free)
 
 
         if self.use_omega:
