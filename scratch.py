@@ -135,7 +135,13 @@ if __name__ == "__main__":
 
 
     keys = ['immobile', 'mobile', 'mobile2d', 'interjector', 'kuramotoAttn', 'kuramotoJ', 'kuramotoAttn2d', 'kuramotoJ2dClassic', 'kuramotoJ2d']
+    # playmode = 'mobile'
+
+
     playmode = 'kuramotoJ2d'
+    # playmode = 'kuramotoAttn2d'
+
+
 
     print(f"""Running simulation for playmode: {playmode}""")
 
@@ -396,7 +402,7 @@ if __name__ == "__main__":
         dt = 0.1
 
         #speed variance of the free particles 
-        speed_variance = 5.
+        speed_variance = 20.0
 
         #angular speed of the anchors 
         angular_speed = 0.2     # rad / unit-time
@@ -411,7 +417,7 @@ if __name__ == "__main__":
             dt=dt,
         )
         myseed= 6
-        weight = 0.0
+        weight = 10.0
         fps = 8
 
         anchor_traj = traj.squeeze(2)[:, :, :d]

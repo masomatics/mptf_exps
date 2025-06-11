@@ -117,6 +117,13 @@ class Simulator:
         return z0
 
 
+    def project_to_tangent_space(self, vector, loc) -> torch.Tensor:
+        """Project a vector onto the tangent space at a given location."""
+        Jfree = vector[:self.n0]
+        free = loc 
+        projected  = Jfree - (Jfree * free).sum(dim=1, keepdim=True) * free
+        return projected
+
 # ======================================================================
 #  SUBCLASS – MULTIPLE IMMOBILE ANCHORS
 # ======================================================================
@@ -246,7 +253,8 @@ class MobileAnchorSimulator(AnchorSimulator):
             attn_state = state.clone()
             attn_state[-self.M:] *= self.anchor_weight.view(-1, 1)
             dz = self._step(attn_state)
-            free_next = state[:-self.M] + self.dt * dz[:-self.M]
+            dz = self.project_to_tangent_space(dz, state[:self.n0])  # project to tangent space
+            free_next = state[:self.n0] + self.dt * dz[:self.n0]
             free_next = _normalize_rows(free_next)
 
             # ------ anchor update --------------------------------------
@@ -383,11 +391,10 @@ class KuramotoSelfAttnSimulator(MobileAnchorSimulator):
 
     # ------------------------------------------------------------
     def Jxz(self, state: torch.Tensor) -> torch.Tensor:
-        """Self‑attention connectivity for free particles only."""
+        """Self-attention connectivity identical to MobileAnchorSimulator."""
         N0 = self.n0
-        free = state[:N0]
         attn = _row_softmax(self.beta * (state @ state.T))
-        return attn[:N0, :N0] @ free                  # (N₀,d)
+        return attn[:N0] @ state                       # ←★ full 列を利用
 
     # ------------------------------------------------------------
     def _step(self, state: torch.Tensor) -> torch.Tensor:
@@ -396,7 +403,9 @@ class KuramotoSelfAttnSimulator(MobileAnchorSimulator):
         anchors = state[N0:]
 
         Jfree = self.Jxz(state)                       # (N₀,d)
-        proj  = Jfree - (Jfree * free).sum(dim=1, keepdim=True) * free
+        # proj  = Jfree - (Jfree * free).sum(dim=1, keepdim=True) * free
+        proj = self.project_to_tangent_space(Jfree, free)
+
 
         if self.use_omega:
             omega = self._antisymmetrize_batch(self.omg_param)
