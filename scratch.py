@@ -138,8 +138,8 @@ if __name__ == "__main__":
     # playmode = 'mobile'
 
 
-    playmode = 'kuramotoJ2d'
-    # playmode = 'kuramotoAttn2d'
+    # playmode = 'kuramotoJ2d'
+    playmode = 'kuramotoAttn'
 
 
 
@@ -153,18 +153,19 @@ if __name__ == "__main__":
         anchor2 = np.array([0.0, 1.0, 0.0])
         anchors = np.vstack((anchor1, anchor2))
 
-        T = 150
+        T = 50
 
 
         theta_dot = 0.1       # rad / unit-time
         eta_dot   = 0.25
         beta = 5.0
+        dt = 0.5
 
         myseed= 10
         weight = 0.1
 
 
-        a_sim = ps.AnchorSimulator(anchor=anchors, anchor_weight=weight, T=T, beta=beta, dt=0.5)
+        a_sim = ps.AnchorSimulator(anchor=anchors, anchor_weight=weight, T=T, beta=beta, dt=dt)
 
         z_list, t_grid = a_sim.simulate()
 
@@ -306,9 +307,9 @@ if __name__ == "__main__":
         anchors = np.vstack((anchor1, ))
         # anchors = np.vstack((anchor1, anchor2))
 
-        T = 150
+        T = 20
 
-        dt = 0.5
+        dt = 0.1
         theta_dot = 0.2       # rad / unit-time
         eta_dot   = 0.25
         beta = 5.0
@@ -320,7 +321,7 @@ if __name__ == "__main__":
             dt=dt,
         )
         myseed= 10
-        weight = 1.0
+        weight = 10.0
         fps = 8
 
         anchor_traj = traj.squeeze(2)
@@ -405,10 +406,10 @@ if __name__ == "__main__":
         speed_variance = 20.0
 
         #angular speed of the anchors 
-        angular_speed = 0.2     # rad / unit-time
+        angular_speed = 0.     # rad / unit-time
         theta_dot = angular_speed      # rad / unit-time
         eta_dot   = angular_speed
-        beta = 5.0
+        beta = 20.0
         traj, t = constant_speed_sphere_path(
             anchors,
             theta_dot=theta_dot,
@@ -417,7 +418,7 @@ if __name__ == "__main__":
             dt=dt,
         )
         myseed= 6
-        weight = 10.0
+        weight = 0.0
         fps = 8
 
         anchor_traj = traj.squeeze(2)[:, :, :d]
